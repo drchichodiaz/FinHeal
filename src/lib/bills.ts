@@ -1,6 +1,6 @@
 // Planificacion de pagos programados. Funciones puras: la app y el conector MCP usan las mismas.
-import type { Bill, BillRepeat } from './config'
-import { fromISO, inPeriod, periodFor, shiftPeriod, toISO, type Period } from './dates'
+import type { Bill, BillRepeat } from './config.js'
+import { fromISO, inPeriod, periodFor, shiftPeriod, toISO, type Period } from './dates.js'
 
 const DAY = 86400000
 const r2 = (n: number) => Math.round(n * 100) / 100
