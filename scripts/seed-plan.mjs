@@ -29,6 +29,12 @@ if (users.length !== 1) {
   process.exit(1)
 }
 
+// Los pagos programados se manejan desde la app: si el JSON no trae, se conservan los guardados
+if (!Array.isArray(plan.bills)) {
+  const { data: cur } = await db.from('plans').select('data').eq('user_id', users[0].id).maybeSingle()
+  plan.bills = cur?.data?.bills ?? []
+}
+
 const { error } = await db.from('plans').upsert({ user_id: users[0].id, data: plan, updated_at: new Date().toISOString() })
 if (error) throw error
 console.log(`Plan cargado para ${users[0].email}: ${plan.categories.length} sobres, ${plan.goals.length} metas.`)

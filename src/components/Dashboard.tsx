@@ -4,6 +4,7 @@ import { fromISO, periodFor, todayISO } from '../lib/dates'
 import { money } from '../lib/format'
 import { latestBalance, type Data } from '../lib/useData'
 import { Card } from './ui'
+import { PagosResumen } from './Pagos'
 
 // Tokens de grafica (paleta de referencia dataviz, superficie clara)
 const C = {
@@ -88,6 +89,8 @@ export function Dashboard({ data, goTo }: { data: Data; goTo: (tab: 'metas' | 'q
           <MeterTile label="Abono a deudas" value={q.debt} max={data.plan.debtTargetPerQuincena} kind="goal" />
         </div>
       </div>
+
+      <PagosResumen data={data} onOpen={() => goTo('metas')} />
 
       {/* Tendencia de deuda */}
       <Card>

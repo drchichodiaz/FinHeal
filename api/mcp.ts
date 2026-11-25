@@ -11,6 +11,8 @@ type RpcRequest = { jsonrpc: '2.0'; id?: string | number | null; method: string;
 const INSTRUCTIONS =
   'FinHeal es el registro de gastos personales del usuario con sobres por quincena (del 15 al 29 y del 30 al 14). ' +
   'Para un check diario usa resumen_quincena. Antes de anotar, si dudas de la categoría o método, usa ver_plan. ' +
+  'Si el usuario menciona un pago futuro ("tengo que pagar X para el Y"), agéndalo con agendar_pago en vez de anotarlo como gasto; ' +
+  'el resumen de quincena incluye cuánto apartar para esos pagos. ' +
   'Montos en dólares. Confirma con el usuario antes de borrar.'
 
 function unauthorized(req: Request) {

@@ -1,6 +1,7 @@
 // Herramientas MCP de FinHeal. Cada funcion recibe el user_id del token OAuth
 // y TODAS las consultas filtran por ese user_id (la service role key salta RLS).
-import { DEBT_CATEGORY, allCategories, normalizePlan, type Plan } from '../../src/lib/config.js'
+import { BILL_CATEGORY, DEBT_CATEGORY, allCategories, isSobreExpense, newId, normalizePlan, type Bill, type BillRepeat, type Plan } from '../../src/lib/config.js'
+import { REPEAT_LABEL, nextDue, planBills, type BillPlan } from '../../src/lib/bills.js'
 import { fromISO, inPeriod, periodFor } from '../../src/lib/dates.js'
 import { adminDb } from './db.js'
 
@@ -92,7 +93,8 @@ async function resumenQuincena(uid: string, args: Record<string, unknown>) {
   for (const e of exp) byCat.set(e.category, (byCat.get(e.category) ?? 0) + Number(e.amount))
   const income = r2(inc.reduce((t, i) => t + Number(i.amount), 0))
   const debt = r2(byCat.get(DEBT_CATEGORY.id) ?? 0)
-  const spent = r2(exp.filter((e) => e.category !== DEBT_CATEGORY.id).reduce((t, e) => t + Number(e.amount), 0))
+  const billsPaid = r2(byCat.get(BILL_CATEGORY.id) ?? 0)
+  const spent = r2(exp.filter((e) => isSobreExpense(e.category)).reduce((t, e) => t + Number(e.amount), 0))
   const isCurrent = inPeriod(today(), period)
 
   return {
@@ -106,7 +108,12 @@ async function resumenQuincena(uid: string, args: Record<string, unknown>) {
     gastado_en_sobres: spent,
     abonado_a_deudas: debt,
     meta_abono_deudas: plan.debtTargetPerQuincena,
-    queda_en_cuenta: r2(income - spent - debt),
+    pagado_programados: billsPaid,
+    queda_en_cuenta: r2(income - spent - debt - billsPaid),
+    apartar_esta_quincena: r2(planBills(plan.bills, today()).reduce((t, b) => t + b.thisQuincena, 0)),
+    pagos_proximos: planBills(plan.bills, today())
+      .filter((b) => b.daysLeft <= 60 && b.status !== 'listo')
+      .map(billView),
     presupuesto_total_sobres: r2(plan.categories.reduce((t, c) => t + c.budget, 0)),
     sobres: plan.categories
       .filter((c) => c.budget > 0)
@@ -263,6 +270,117 @@ async function verPlan(uid: string) {
   return { plan_configurado: hasPlan, ...plan, categorias_validas: allCategories(plan).map((c) => ({ id: c.id, nombre: c.label, limite_quincena: c.budget })) }
 }
 
+// ---------- pagos programados ----------
+
+function billView(b: BillPlan) {
+  return {
+    id: b.bill.id,
+    pago: b.bill.label,
+    monto: b.bill.amount,
+    vence: b.bill.due,
+    dias_para_vencer: b.daysLeft,
+    repite: REPEAT_LABEL[b.bill.repeat],
+    apartado: b.bill.saved,
+    falta_apartar: b.remaining,
+    quincenas_para_apartar: b.quincenas.map((q) => q.start),
+    apartar_por_quincena: b.perQuincena,
+    apartar_esta_quincena: b.thisQuincena,
+    estado: b.status,
+    nota: b.bill.note ?? null,
+  }
+}
+
+async function savePlanDb(uid: string, plan: Plan) {
+  check(await adminDb().from('plans').upsert({ user_id: uid, data: plan, updated_at: new Date().toISOString() }), 'guardar plan')
+}
+
+function findBill(plan: Plan, input: unknown): Bill {
+  const q = norm(input)
+  const found = plan.bills.find((b) => norm(b.id) === q) ?? plan.bills.find((b) => norm(b.label) === q) ?? plan.bills.find((b) => norm(b.label).includes(q))
+  if (!found) fail(plan.bills.length ? `Pago "${input}" no existe. Opciones: ${plan.bills.map((b) => b.label).join(', ')}` : 'No hay pagos programados. Crea uno con agendar_pago.')
+  return found!
+}
+
+const REPEATS: Record<string, BillRepeat> = {
+  none: 'none', no: 'none', una: 'none', 'una vez': 'none',
+  monthly: 'monthly', mensual: 'monthly', 'cada mes': 'monthly',
+  yearly: 'yearly', anual: 'yearly', 'cada ano': 'yearly',
+}
+
+async function agendarPago(uid: string, args: Record<string, unknown>) {
+  const { plan } = await loadPlan(uid)
+  const label = String(args.nombre ?? '').trim().slice(0, 60)
+  if (!label) fail('nombre es requerido (ej. "Seguro del carro")')
+  const amount = amountArg(args.monto)
+  if (!args.vence || !ISO.test(String(args.vence))) fail('vence debe tener formato YYYY-MM-DD')
+  const due = String(args.vence)
+  const repeat = args.repetir === undefined || args.repetir === '' ? undefined : (REPEATS[norm(args.repetir)] ?? fail('repetir debe ser "una vez", "mensual" o "anual"'))
+  const note = args.nota ? String(args.nota).slice(0, 200) : undefined
+  const existing = plan.bills.find((b) => norm(b.label) === norm(label))
+  const bill: Bill = existing
+    ? { ...existing, amount, due, repeat: repeat ?? existing.repeat, note: note ?? existing.note }
+    : { id: newId('pago'), label, icon: '📅', amount, due, repeat: repeat ?? 'none', saved: 0, note }
+  plan.bills = existing ? plan.bills.map((b) => (b.id === bill.id ? bill : b)) : [...plan.bills, bill]
+  await savePlanDb(uid, plan)
+  return { ok: true, accion: existing ? 'actualizado' : 'creado', ...billView(planBills([bill], today())[0]) }
+}
+
+async function verPagos(uid: string) {
+  const { plan } = await loadPlan(uid)
+  const list = planBills(plan.bills, today())
+  return {
+    hoy: today(),
+    apartar_esta_quincena: r2(list.reduce((t, b) => t + b.thisQuincena, 0)),
+    total_apartado: r2(list.reduce((t, b) => t + b.bill.saved, 0)),
+    pagos: list.map(billView),
+    nota: 'Lo apartado sigue en la cuenta del usuario pero ya no es dinero libre.',
+  }
+}
+
+async function apartarPago(uid: string, args: Record<string, unknown>) {
+  const { plan } = await loadPlan(uid)
+  const bill = findBill(plan, args.pago)
+  const n = Number(args.monto)
+  if (!Number.isFinite(n) || n === 0 || Math.abs(n) > 100000) fail('monto debe ser un número distinto de 0 (negativo para devolver lo apartado)')
+  bill.saved = r2(Math.max(0, bill.saved + n))
+  bill.savedOn = dateArg(args.fecha)
+  await savePlanDb(uid, plan)
+  return { ok: true, ...billView(planBills([bill], today())[0]) }
+}
+
+async function pagarProgramado(uid: string, args: Record<string, unknown>) {
+  const { plan } = await loadPlan(uid)
+  const bill = findBill(plan, args.pago)
+  const amount = args.monto === undefined || args.monto === null ? bill.amount : amountArg(args.monto)
+  const method = resolveOption(plan.methods, args.metodo, 'Método')
+  const fecha = dateArg(args.fecha)
+  const row = check(
+    await adminDb().from('expenses').insert({ user_id: uid, amount, category: BILL_CATEGORY.id, method, spent_on: fecha, note: bill.label }).select('id').single(),
+    'guardar gasto',
+  ) as { id: string }
+  const next = nextDue(bill.due, bill.repeat)
+  plan.bills = next
+    ? plan.bills.map((b) => (b.id === bill.id ? { ...b, due: next, saved: 0, savedOn: undefined } : b))
+    : plan.bills.filter((b) => b.id !== bill.id)
+  await savePlanDb(uid, plan)
+  return {
+    ok: true,
+    gasto_id: row.id,
+    pagado: { pago: bill.label, monto: amount, metodo: method, fecha },
+    apartado_tenia: bill.saved,
+    diferencia: r2(bill.saved - amount), // >0 sobro lo apartado; <0 hubo que poner de mas
+    siguiente_vencimiento: next,
+  }
+}
+
+async function borrarPago(uid: string, args: Record<string, unknown>) {
+  const { plan } = await loadPlan(uid)
+  const bill = findBill(plan, args.pago)
+  plan.bills = plan.bills.filter((b) => b.id !== bill.id)
+  await savePlanDb(uid, plan)
+  return { ok: true, borrado: bill.label, tenia_apartado: bill.saved }
+}
+
 // ---------- definicion MCP ----------
 
 type Tool = {
@@ -305,7 +423,7 @@ export const TOOLS: Tool[] = [
       required: ['monto', 'categoria'],
       properties: {
         monto: { type: 'number', description: 'Monto en dólares' },
-        categoria: { type: 'string', description: 'id o nombre del sobre (ej. "super", "salidas"). "deuda" = pago a deudas.' },
+        categoria: { type: 'string', description: 'id o nombre del sobre (ej. "super", "salidas"). "deuda" = pago a deudas. Para pagos agendados usa pagar_programado.' },
         metodo: { type: 'string', description: 'Método de pago (ej. Efectivo, Yappy, Débito). Si se omite, el primero del plan.' },
         meta: { type: 'string', description: 'Solo si categoria = "deuda": id o nombre de la deuda que se abona (ej. "tarjeta", "prestamo"). Su saldo baja automáticamente.' },
         fecha,
@@ -358,6 +476,69 @@ export const TOOLS: Tool[] = [
     },
     annotations: { readOnlyHint: false, destructiveHint: true },
     run: borrarMovimiento,
+  },
+  {
+    name: 'ver_pagos',
+    title: 'Ver pagos programados',
+    description: 'Pagos futuros (seguros, matrículas, impuestos...) con su vencimiento, lo apartado, lo que falta y cuánto apartar por quincena. Úsalo para planificar.',
+    inputSchema: { type: 'object', properties: {} },
+    annotations: { readOnlyHint: true },
+    run: (uid) => verPagos(uid),
+  },
+  {
+    name: 'agendar_pago',
+    title: 'Agendar pago programado',
+    description: 'Crea (o actualiza, si ya existe con ese nombre) un pago futuro. FinHeal reparte lo que falta entre las quincenas que quedan antes del vencimiento. Úsalo cuando el usuario diga "tengo que pagar X para el día Y". No es un gasto: no lo anotes con anotar_gasto.',
+    inputSchema: {
+      type: 'object',
+      required: ['nombre', 'monto', 'vence'],
+      properties: {
+        nombre: { type: 'string', description: 'Ej. "Seguro del carro"' },
+        monto: { type: 'number', description: 'Monto estimado en dólares (si es aproximado, redondea hacia arriba)' },
+        vence: { type: 'string', description: 'Fecha de vencimiento YYYY-MM-DD' },
+        repetir: { type: 'string', enum: ['una vez', 'mensual', 'anual'], description: 'Si se repite. Por defecto "una vez".' },
+        nota: { type: 'string' },
+      },
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false },
+    run: agendarPago,
+  },
+  {
+    name: 'apartar_pago',
+    title: 'Apartar dinero para un pago',
+    description: 'Registra dinero apartado para un pago programado (sigue en la cuenta, pero ya no es libre). Monto negativo para devolver lo apartado.',
+    inputSchema: {
+      type: 'object',
+      required: ['pago', 'monto'],
+      properties: { pago: { type: 'string', description: 'Nombre o id del pago' }, monto: { type: 'number' }, fecha },
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false },
+    run: apartarPago,
+  },
+  {
+    name: 'pagar_programado',
+    title: 'Marcar pago programado como pagado',
+    description: 'Registra el pago como gasto (categoría Pago programado, no cuenta contra los sobres). Si se repite, agenda el siguiente vencimiento; si no, lo quita de la lista.',
+    inputSchema: {
+      type: 'object',
+      required: ['pago'],
+      properties: {
+        pago: { type: 'string', description: 'Nombre o id del pago' },
+        monto: { type: 'number', description: 'Monto real pagado. Si se omite, el monto agendado.' },
+        metodo: { type: 'string' },
+        fecha,
+      },
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false },
+    run: pagarProgramado,
+  },
+  {
+    name: 'borrar_pago',
+    title: 'Borrar pago programado',
+    description: 'Quita un pago programado de la lista sin registrar gasto. Confirma con el usuario antes de usarlo.',
+    inputSchema: { type: 'object', required: ['pago'], properties: { pago: { type: 'string' } } },
+    annotations: { readOnlyHint: false, destructiveHint: true },
+    run: borrarPago,
   },
   {
     name: 'ver_plan',

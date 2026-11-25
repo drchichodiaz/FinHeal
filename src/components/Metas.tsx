@@ -5,6 +5,7 @@ import { money, round2 } from '../lib/format'
 import { supabase } from '../lib/supabase'
 import { latestBalance, type Data } from '../lib/useData'
 import { Bar, Card } from './ui'
+import { Pagos } from './Pagos'
 
 export function Metas({ data, onSaved }: { data: Data; onSaved: (msg: string) => void }) {
   const debts = data.plan.goals.filter((g) => g.type === 'deuda')
@@ -26,6 +27,8 @@ export function Metas({ data, onSaved }: { data: Data; onSaved: (msg: string) =>
           Pagado {money(Math.max(0, initialDebt - totalDebt))} de {money(initialDebt)}
         </div>
       </Card>
+
+      <Pagos data={data} onSaved={onSaved} />
 
       {data.plan.goals.map((g) => (
         <GoalCard key={g.kind} goal={g} data={data} onSaved={onSaved} />

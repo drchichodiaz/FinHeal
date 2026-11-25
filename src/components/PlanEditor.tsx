@@ -37,6 +37,7 @@ export function PlanEditor({ data, onSaved }: { data: Data; onSaved: (msg: strin
 
   async function save() {
     const clean: Plan = {
+      bills: data.plan.bills, // se editan en Metas; usar siempre lo ultimo guardado
       categories: plan.categories
         .filter((c) => c.label.trim())
         .map((c) => ({ ...c, label: c.label.trim(), budget: round2(Number(c.budget) || 0) })),

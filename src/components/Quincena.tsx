@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { DEBT_CATEGORY } from '../lib/config'
+import { BILL_CATEGORY, DEBT_CATEGORY, isSobreExpense } from '../lib/config'
 import { daysLeft, inPeriod, periodFor, shiftPeriod, todayISO } from '../lib/dates'
 import { money, round2 } from '../lib/format'
 import type { Data } from '../lib/useData'
@@ -17,10 +17,11 @@ export function Quincena({ data }: { data: Data }) {
     const byCat = new Map<string, number>()
     for (const e of exp) byCat.set(e.category, (byCat.get(e.category) ?? 0) + e.amount)
     const income = inc.reduce((t, i) => t + i.amount, 0)
-    const spent = exp.filter((e) => e.category !== DEBT_CATEGORY.id).reduce((t, e) => t + e.amount, 0)
+    const spent = exp.filter((e) => isSobreExpense(e.category)).reduce((t, e) => t + e.amount, 0)
     const debt = byCat.get(DEBT_CATEGORY.id) ?? 0
+    const bills = byCat.get(BILL_CATEGORY.id) ?? 0
     const budget = plan.categories.reduce((t, c) => t + c.budget, 0)
-    return { byCat, income: round2(income), spent: round2(spent), debt: round2(debt), budget: round2(budget), left: round2(income - spent - debt) }
+    return { byCat, income: round2(income), spent: round2(spent), debt: round2(debt), bills: round2(bills), budget: round2(budget), left: round2(income - spent - debt - bills) }
   }, [data, period, plan])
 
   const over = plan.categories.filter((c) => c.budget > 0 && (s.byCat.get(c.id) ?? 0) > c.budget)
@@ -42,6 +43,7 @@ export function Quincena({ data }: { data: Data }) {
           <Stat label="Gastado" value={s.spent} />
           <Stat label="A deudas" value={s.debt} />
         </div>
+        {s.bills > 0 && <p className="mt-2 text-center text-xs text-slate-500">📅 Pagos programados: {money(s.bills)}</p>}
         <div className="mt-3 rounded-xl bg-slate-50 py-2 text-center">
           <div className="text-xs text-slate-500">Queda en cuenta</div>
           <div className={`text-2xl font-bold ${s.left < 0 ? 'text-rose-600' : 'text-slate-900'}`}>{money(s.left)}</div>

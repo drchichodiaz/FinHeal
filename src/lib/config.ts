@@ -22,6 +22,21 @@ export type Goal = {
   reducedBySource?: string // si llega un ingreso con esta fuente, el saldo baja solo
 }
 
+export type BillRepeat = 'none' | 'monthly' | 'yearly'
+
+// Pago futuro conocido (seguro, matricula, impuesto...): se va apartando por quincena hasta que vence
+export type Bill = {
+  id: string
+  label: string
+  icon: string
+  amount: number
+  due: string // YYYY-MM-DD
+  repeat: BillRepeat
+  saved: number // lo apartado hasta ahora (sigue en la cuenta, pero ya no es dinero libre)
+  savedOn?: string // ultima fecha en que se aparto algo
+  note?: string
+}
+
 export type Plan = {
   categories: Category[]
   debtTargetPerQuincena: number
@@ -29,10 +44,17 @@ export type Plan = {
   incomeSources: string[]
   goals: Goal[]
   rules: string[]
+  bills: Bill[]
 }
 
 // Categoria fija para abonos a deudas: no cuenta contra los sobres
 export const DEBT_CATEGORY: Category = { id: 'deuda', label: 'Pago a deudas', icon: '💳', budget: 0 }
+
+// Categoria fija para pagos programados: se cubren con lo apartado, no con los sobres
+export const BILL_CATEGORY: Category = { id: 'programado', label: 'Pago programado', icon: '📅', budget: 0 }
+
+// Gastos que no cuentan contra los sobres
+export const isSobreExpense = (category: string) => category !== DEBT_CATEGORY.id && category !== BILL_CATEGORY.id
 
 export const DEFAULT_PLAN: Plan = {
   categories: [
@@ -52,10 +74,11 @@ export const DEFAULT_PLAN: Plan = {
     { kind: 'colchon', label: 'Fondo de emergencia', icon: '🛟', type: 'ahorro', initial: 0, target: 0, hint: '' },
   ],
   rules: [],
+  bills: [],
 }
 
 export function allCategories(plan: Plan): Category[] {
-  return [...plan.categories, DEBT_CATEGORY]
+  return [...plan.categories, DEBT_CATEGORY, BILL_CATEGORY]
 }
 
 export function newId(prefix: string): string {
@@ -71,5 +94,6 @@ export function normalizePlan(raw: Partial<Plan> | null | undefined): Plan {
     incomeSources: raw?.incomeSources?.length ? raw.incomeSources : DEFAULT_PLAN.incomeSources,
     goals: raw?.goals ?? DEFAULT_PLAN.goals,
     rules: raw?.rules ?? [],
+    bills: (raw?.bills ?? []).map((b) => ({ ...b, amount: Number(b.amount) || 0, saved: Number(b.saved) || 0, repeat: b.repeat ?? 'none' })),
   }
 }

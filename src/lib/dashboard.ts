@@ -1,4 +1,4 @@
-import { DEBT_CATEGORY, type Goal } from './config'
+import { BILL_CATEGORY, DEBT_CATEGORY, isSobreExpense, type Goal } from './config'
 import { fromISO, inPeriod, periodFor, shiftPeriod, todayISO, type Period } from './dates'
 import type { Data } from './useData'
 
@@ -50,6 +50,7 @@ export type QuincenaStat = {
   income: number
   spent: number
   debt: number
+  bills: number // pagos programados (cubiertos con lo apartado)
   budget: number
   left: number
   current: boolean
@@ -58,10 +59,12 @@ export type QuincenaStat = {
 export function quincenaStat(data: Data, period: Period): QuincenaStat {
   const exp = data.expenses.filter((e) => inPeriod(e.spent_on, period))
   const income = r2(data.incomes.filter((i) => inPeriod(i.received_on, period)).reduce((t, i) => t + i.amount, 0))
-  const spent = r2(exp.filter((e) => e.category !== DEBT_CATEGORY.id).reduce((t, e) => t + e.amount, 0))
-  const debt = r2(exp.filter((e) => e.category === DEBT_CATEGORY.id).reduce((t, e) => t + e.amount, 0))
+  const sum = (f: (c: string) => boolean) => r2(exp.filter((e) => f(e.category)).reduce((t, e) => t + e.amount, 0))
+  const spent = sum(isSobreExpense)
+  const debt = sum((c) => c === DEBT_CATEGORY.id)
+  const bills = sum((c) => c === BILL_CATEGORY.id)
   const budget = r2(data.plan.categories.reduce((t, c) => t + c.budget, 0))
-  return { period, income, spent, debt, budget, left: r2(income - spent - debt), current: inPeriod(todayISO(), period) }
+  return { period, income, spent, debt, bills, budget, left: r2(income - spent - debt - bills), current: inPeriod(todayISO(), period) }
 }
 
 // Ultimas quincenas (hasta 6) desde la primera con movimientos
