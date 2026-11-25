@@ -557,7 +557,9 @@ export async function callTool(uid: string, name: string, args: Record<string, u
     const result = await tool.run(uid, args ?? {})
     return { content: [{ type: 'text', text: JSON.stringify(result, null, 1) }] }
   } catch (e) {
-    const msg = e instanceof ToolError ? e.message : 'Error interno del servidor'
+    // Los errores de configuracion ("Falta X") solo nombran la variable, nunca su valor
+    const config = e instanceof Error && /^Falta [A-Z_]+$/.test(e.message)
+    const msg = e instanceof ToolError ? e.message : config ? `Servidor mal configurado: ${(e as Error).message} en Vercel` : 'Error interno del servidor'
     if (!(e instanceof ToolError)) console.error(e)
     return { isError: true, content: [{ type: 'text', text: msg }] }
   }
