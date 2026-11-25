@@ -40,6 +40,7 @@ export function PlanEditor({ data, onSaved }: { data: Data; onSaved: (msg: strin
       bills: data.plan.bills, // se editan en Metas; usar siempre lo ultimo guardado
       incomePerQuincena: round2(Number(plan.incomePerQuincena) || 0),
       startedOn: plan.startedOn || undefined,
+      review: data.plan.review, // la escribe Claude; conservar la ultima guardada
       categories: plan.categories
         .filter((c) => c.label.trim())
         .map((c) => ({ ...c, label: c.label.trim(), budget: round2(Number(c.budget) || 0) })),

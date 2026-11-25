@@ -42,6 +42,8 @@ export type Bill = {
   note?: string
 }
 
+export type Review = { date: string; summary: string; points: string[] }
+
 export type Plan = {
   categories: Category[]
   debtTargetPerQuincena: number
@@ -50,6 +52,7 @@ export type Plan = {
   goals: Goal[]
   rules: string[]
   bills: Bill[]
+  review?: Review // ultima revision de la estrategia hecha por Claude
   incomePerQuincena: number // lo que deberia entrar cada quincena (salario neto); 0 = sin estrategia
   startedOn?: string // YYYY-MM-DD: la quincena en que empezo el plan se presupuesta en proporcion
 }
@@ -104,6 +107,7 @@ export function normalizePlan(raw: Partial<Plan> | null | undefined): Plan {
     rules: raw?.rules ?? [],
     incomePerQuincena: Number(raw?.incomePerQuincena ?? 0) || 0,
     startedOn: raw?.startedOn || undefined,
+    review: raw?.review ?? undefined,
     bills: (raw?.bills ?? []).map((b) => ({ ...b, amount: Number(b.amount) || 0, saved: Number(b.saved) || 0, repeat: b.repeat ?? 'none' })),
   }
 }

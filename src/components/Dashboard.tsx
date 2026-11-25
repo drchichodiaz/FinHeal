@@ -5,7 +5,7 @@ import { money } from '../lib/format'
 import { latestBalance, type Data } from '../lib/useData'
 import { Card } from './ui'
 import { PagosResumen } from './Pagos'
-import { Estrategia } from './Estrategia'
+import { Estrategia, Revision } from './Estrategia'
 import { buildStrategy } from '../lib/strategy'
 
 // Tokens de grafica (paleta de referencia dataviz, superficie clara)
@@ -84,6 +84,7 @@ export function Dashboard({ data, goTo }: { data: Data; goTo: (tab: 'metas' | 'q
       </Card>
 
       <Estrategia strategy={strategy} onSetup={() => goTo('plan')} />
+      <Revision review={data.plan.review} />
 
       {/* KPI de la quincena */}
       <div>

@@ -287,13 +287,13 @@ function currentQuincena(input: StratInput, today: string, st: State): QuincenaP
   return q
 }
 
-function futureQuincena(plan: Plan, p: Period, st: State): QuincenaPlan {
+function futureQuincena(plan: Plan, p: Period, st: State, extra = 0): QuincenaPlan {
   // Intereses de la quincena sobre lo que se debe
   for (const g of debtsOf(plan)) {
     const b = st.bal.get(g.kind) ?? 0
     if (b > 0 && g.rate) st.bal.set(g.kind, r2(b * (1 + g.rate / 100 / 24)))
   }
-  const income = plan.incomePerQuincena
+  const income = r2(plan.incomePerQuincena + extra)
   const sobres = sum(plan.categories.map((c) => c.budget))
   const steps: Step[] = [{ key: 'sobres', kind: 'sobres', icon: '✉️', label: 'Sobres', amount: sobres, done: null }]
   let free = r2(income - sobres)
@@ -314,7 +314,9 @@ function futureQuincena(plan: Plan, p: Period, st: State): QuincenaPlan {
   return q
 }
 
-export function buildStrategy(input: StratInput, today: string, horizon = 120): Strategy {
+export type ExtraIncome = { date: string; amount: number } // ingreso extra supuesto (ej. decimo) para simular
+
+export function buildStrategy(input: StratInput, today: string, horizon = 120, extras: ExtraIncome[] = []): Strategy {
   const { plan } = input
   const st: State = {
     bal: new Map(plan.goals.map((g) => [g.kind, latest(input, g)])),
@@ -335,7 +337,8 @@ export function buildStrategy(input: StratInput, today: string, horizon = 120): 
   let p = periodFor(today)
   for (let i = 1; i < horizon; i++) {
     p = shiftPeriod(p, 1)
-    const q = futureQuincena(plan, p, st)
+    const extra = sum(extras.filter((x) => inPeriod(x.date, p)).map((x) => x.amount))
+    const q = futureQuincena(plan, p, st, extra)
     quincenas.push(q)
     // La fecha de cada logro es el dia en que se hace el pago de esa quincena
     check(p.start)

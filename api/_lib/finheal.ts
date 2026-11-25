@@ -3,7 +3,7 @@
 import { BILL_CATEGORY, DEBT_CATEGORY, allCategories, isSobreExpense, newId, normalizePlan, type Bill, type BillRepeat, type Plan } from '../../src/lib/config.js'
 import { REPEAT_LABEL, nextDue, planBills, type BillPlan } from '../../src/lib/bills.js'
 import { buildStrategy } from '../../src/lib/strategy.js'
-import { fromISO, inPeriod, periodFor } from '../../src/lib/dates.js'
+import { fromISO, inPeriod, periodFor, shiftPeriod } from '../../src/lib/dates.js'
 import { adminDb } from './db.js'
 
 const r2 = (n: number) => Math.round(n * 100) / 100
@@ -430,6 +430,189 @@ async function estrategia(uid: string, args: Record<string, unknown>) {
   }
 }
 
+// ---------- auditoria de la estrategia (analisis con criterio de Claude) ----------
+
+const GUIA_AUDITORIA = [
+  'Eres un asesor financiero revisando la estrategia calculada. El programa aplica reglas fijas; tu trabajo es el criterio que el programa no tiene.',
+  '1. Realismo de los sobres: compara el presupuesto con lo gastado de verdad en historial_quincenas. Un sobre que se pasa siempre no es disciplina, es un presupuesto mal hecho: propón subirlo y de dónde sacarlo. Uno que siempre sobra puede bajar.',
+  '2. Orden de prioridades: ¿sigue teniendo sentido llenar el colchón antes de la tarjeta? Pondera el costo (tasa de la tarjeta sobre lo que se deja de abonar) contra el riesgo (ingreso inestable, empresa que paga tarde). Usa simular_estrategia para medir la diferencia en fechas antes de opinar.',
+  '3. Riesgos y huecos: gastos que se vienen y no están agendados (fin de año, regalos, mantenimiento del carro, matrícula, impuestos, renovaciones anuales). Pagos mínimos sin registrar como cuota. Pagos programados en estado urgente. Quincenas con faltante.',
+  '4. Datos desactualizados: saldos de deudas sin actualizar desde hace más de un corte, colchón sin actualizar al cierre, ingresos de la quincena sin anotar.',
+  '5. Comportamiento: patrones en los movimientos (gastos hormiga, días o métodos donde se dispara el gasto, salidas sociales). Sé concreto y sin sermones.',
+  '6. Oportunidades: dinero por cobrar a la empresa, décimos, ingresos extra; qué hacer con ellos cuando lleguen (simúlalo).',
+  'Entrega: (a) veredicto en 1-2 líneas, (b) máximo 5 hallazgos ordenados por impacto, cada uno con número y acción, (c) cambios propuestos al plan con su efecto simulado en fechas. NO apliques cambios con ajustar_plan sin que el usuario diga que sí. Al final guarda la conclusión con guardar_revision para que aparezca en la app.',
+].join('\n')
+
+type Cambios = {
+  ingreso_quincena?: number
+  sobres?: Record<string, number>
+  metas?: Record<string, { meta?: number; tasa?: number; cuota?: number; dia_pago?: number; antes_de_deudas?: boolean }>
+  meta_abono_quincena?: number
+}
+
+// Aplica cambios a una copia del plan. Devuelve el plan nuevo y la lista legible de cambios.
+function applyChanges(plan: Plan, c: Cambios): { plan: Plan; cambios: string[] } {
+  const next: Plan = structuredClone(plan)
+  const out: string[] = []
+  const money = (v: unknown, what: string) => {
+    const n = Number(v)
+    if (!Number.isFinite(n) || n < 0 || n > 100000) fail(`${what}: monto inválido`)
+    return r2(n)
+  }
+  if (c.ingreso_quincena !== undefined) {
+    next.incomePerQuincena = money(c.ingreso_quincena, 'ingreso_quincena')
+    out.push(`Ingreso por quincena: ${plan.incomePerQuincena} → ${next.incomePerQuincena}`)
+  }
+  if (c.meta_abono_quincena !== undefined) {
+    next.debtTargetPerQuincena = money(c.meta_abono_quincena, 'meta_abono_quincena')
+    out.push(`Meta de abono por quincena: ${plan.debtTargetPerQuincena} → ${next.debtTargetPerQuincena}`)
+  }
+  for (const [key, val] of Object.entries(c.sobres ?? {})) {
+    const cat = next.categories.find((x) => norm(x.id) === norm(key)) ?? next.categories.find((x) => norm(x.label).includes(norm(key)))
+    if (!cat) fail(`Sobre "${key}" no existe. Opciones: ${next.categories.map((x) => x.id).join(', ')}`)
+    const before = cat!.budget
+    cat!.budget = money(val, `sobre ${key}`)
+    out.push(`Sobre ${cat!.label}: ${before} → ${cat!.budget}`)
+  }
+  for (const [key, val] of Object.entries(c.metas ?? {})) {
+    const g = next.goals.find((x) => norm(x.kind) === norm(key)) ?? next.goals.find((x) => norm(x.label).includes(norm(key)))
+    if (!g) fail(`Meta "${key}" no existe. Opciones: ${next.goals.map((x) => x.kind).join(', ')}`)
+    if (val.meta !== undefined) (out.push(`${g!.label} meta: ${g!.target} → ${money(val.meta, 'meta')}`), (g!.target = money(val.meta, 'meta')))
+    if (val.tasa !== undefined) (out.push(`${g!.label} tasa: ${g!.rate ?? '-'} → ${money(val.tasa, 'tasa')}`), (g!.rate = money(val.tasa, 'tasa')))
+    if (val.cuota !== undefined) (out.push(`${g!.label} cuota/mínimo: ${g!.payment ?? '-'} → ${money(val.cuota, 'cuota')}`), (g!.payment = money(val.cuota, 'cuota') || undefined))
+    if (val.dia_pago !== undefined) {
+      const d = Math.round(Number(val.dia_pago))
+      if (!(d >= 1 && d <= 31)) fail('dia_pago debe estar entre 1 y 31')
+      out.push(`${g!.label} día de pago: ${g!.payDay ?? '-'} → ${d}`)
+      g!.payDay = d
+    }
+    if (val.antes_de_deudas !== undefined) (out.push(`${g!.label} antes de deudas: ${!!g!.beforeDebt} → ${!!val.antes_de_deudas}`), (g!.beforeDebt = !!val.antes_de_deudas || undefined))
+  }
+  if (!out.length) fail('No indicaste ningún cambio')
+  return { plan: next, cambios: out }
+}
+
+async function strategyInput(uid: string, plan: Plan) {
+  const p = periodFor(today())
+  const db = adminDb()
+  const exp = check(await db.from('expenses').select('spent_on, amount, category').eq('user_id', uid).gte('spent_on', p.start).lte('spent_on', p.end), 'gastos') as { spent_on: string; amount: number; category: string }[]
+  const inc = check(await db.from('incomes').select('received_on, amount, source').eq('user_id', uid).gte('received_on', p.start).lte('received_on', p.end), 'ingresos') as { received_on: string; amount: number; source: string }[]
+  return {
+    plan,
+    expenses: exp.map((e) => ({ ...e, amount: Number(e.amount) })),
+    incomes: inc.map((i) => ({ ...i, amount: Number(i.amount) })),
+    balances: await latestBalances(uid),
+  }
+}
+
+function milestones(s: ReturnType<typeof buildStrategy>) {
+  return {
+    deudas: Object.fromEntries(s.debts.map((d) => [d.label, d.date])),
+    ahorros: Object.fromEntries(s.savings.map((d) => [d.label, d.date])),
+    libre_de_deudas: s.debtFree,
+    faltantes_proximas_6: s.quincenas.slice(0, 6).filter((q) => q.deficit > 0).map((q) => ({ quincena: q.period.start, faltante: q.deficit })),
+  }
+}
+
+async function historialQuincenas(uid: string, args: Record<string, unknown>) {
+  const n = Math.min(12, Math.max(1, Number(args.quincenas ?? 6) || 6))
+  const { plan } = await loadPlan(uid)
+  let p = periodFor(today())
+  const periods = [p]
+  for (let i = 1; i < n; i++) periods.unshift((p = shiftPeriod(p, -1)))
+  const db = adminDb()
+  const exp = check(await db.from('expenses').select('spent_on, amount, category, method').eq('user_id', uid).gte('spent_on', periods[0].start).lte('spent_on', periods[periods.length - 1].end), 'gastos') as { spent_on: string; amount: number; category: string; method: string }[]
+  const inc = check(await db.from('incomes').select('received_on, amount, source').eq('user_id', uid).gte('received_on', periods[0].start).lte('received_on', periods[periods.length - 1].end), 'ingresos') as { received_on: string; amount: number; source: string }[]
+  const cats = allCategories(plan)
+  const rows = periods.map((per) => {
+    const e = exp.filter((x) => inPeriod(x.spent_on, per))
+    const by = (f: (x: (typeof e)[number]) => boolean) => r2(e.filter(f).reduce((t, x) => t + Number(x.amount), 0))
+    return {
+      quincena: per.start,
+      actual: inPeriod(today(), per),
+      ingresos: r2(inc.filter((x) => inPeriod(x.received_on, per)).reduce((t, x) => t + Number(x.amount), 0)),
+      gastos: e.length,
+      sobres: Object.fromEntries(
+        cats.map((c) => [c.id, { gastado: by((x) => x.category === c.id), limite: c.budget }]).filter(([, v]) => (v as { gastado: number }).gastado > 0 || (v as { limite: number }).limite > 0),
+      ),
+      por_metodo: Object.fromEntries([...new Set(e.map((x) => x.method))].map((m) => [m, by((x) => x.method === m)])),
+    }
+  })
+  return { desde: periods[0].start, quincenas: rows, nota: 'Las quincenas anteriores al inicio del plan pueden estar vacías.' }
+}
+
+async function auditarEstrategia(uid: string) {
+  const { plan } = await loadPlan(uid)
+  const input = await strategyInput(uid, plan)
+  const s = buildStrategy(input, today())
+  if (!s.ready) return { lista: false, aviso: 'Falta el ingreso por quincena en el plan.' }
+  const goalsNow = plan.goals.map((g) => {
+    const last = input.balances.find((b) => b.kind === g.kind)
+    return { id: g.kind, meta: g.label, tipo: g.type, saldo: last?.amount ?? g.initial, actualizado: last?.recorded_on ?? null, objetivo: g.target, tasa: g.rate ?? null, cuota: g.payment ?? null, dia_pago: g.payDay ?? null, antes_de_deudas: !!g.beforeDebt }
+  })
+  return {
+    hoy: today(),
+    guia_de_auditoria: GUIA_AUDITORIA,
+    estrategia: {
+      quincenas: s.quincenas.slice(0, 4).map((q) => ({ quincena: q.period.start, actual: q.current, ingreso: q.income, pasos: q.steps.map((x) => `${x.label}: ${x.amount}${q.current && x.done !== null ? ` (hecho ${x.done})` : ''}`), faltante: q.deficit, avisos: q.warnings })),
+      fechas: milestones(s),
+    },
+    plan: {
+      ingreso_quincena: plan.incomePerQuincena,
+      sobres: plan.categories.map((c) => ({ id: c.id, sobre: c.label, limite: c.budget })),
+      fuentes_de_ingreso: plan.incomeSources,
+      reglas: plan.rules,
+    },
+    metas: goalsNow,
+    pagos_programados: planBills(plan.bills, today()).map(billView),
+    historial: await historialQuincenas(uid, { quincenas: 6 }),
+    revision_anterior: plan.review ?? null,
+    herramientas_para_seguir: 'simular_estrategia (probar cambios), listar_movimientos (detalle), ajustar_plan (solo con el sí del usuario), guardar_revision (al final).',
+  }
+}
+
+async function simularEstrategia(uid: string, args: Record<string, unknown>) {
+  const { plan } = await loadPlan(uid)
+  const input = await strategyInput(uid, plan)
+  const base = buildStrategy(input, today())
+  const c = (args.cambios ?? {}) as Cambios
+  const hasPlanChanges = Object.keys(c).length > 0
+  const changed = hasPlanChanges ? applyChanges(plan, c) : { plan, cambios: [] as string[] }
+  const extras = ((args.ingresos_extra ?? []) as { fecha?: string; monto?: number }[]).map((x) => {
+    if (!x.fecha || !ISO.test(x.fecha)) fail('ingresos_extra: fecha debe ser YYYY-MM-DD')
+    return { date: x.fecha!, amount: amountArg(x.monto) }
+  })
+  if (!hasPlanChanges && !extras.length) fail('Indica cambios o ingresos_extra para simular')
+  const sim = buildStrategy({ ...input, plan: changed.plan }, today(), 120, extras)
+  return {
+    escenario: [...changed.cambios, ...extras.map((x) => `Ingreso extra de ${x.amount} el ${x.date}`)],
+    actual: milestones(base),
+    simulado: milestones(sim),
+    simulado_proximas_quincenas: sim.quincenas.slice(0, 3).map((q) => ({ quincena: q.period.start, pasos: q.steps.map((x) => `${x.label}: ${x.amount}`), faltante: q.deficit })),
+    nota: 'Nada se guardó. Para aplicarlo, usa ajustar_plan con los mismos cambios, solo si el usuario lo aprueba.',
+  }
+}
+
+async function ajustarPlan(uid: string, args: Record<string, unknown>) {
+  const { plan } = await loadPlan(uid)
+  const input = await strategyInput(uid, plan)
+  const before = buildStrategy(input, today())
+  const { plan: next, cambios } = applyChanges(plan, (args.cambios ?? {}) as Cambios)
+  await savePlanDb(uid, next)
+  const after = buildStrategy({ ...input, plan: next }, today())
+  return { ok: true, cambios_aplicados: cambios, fechas_antes: milestones(before), fechas_ahora: milestones(after) }
+}
+
+async function guardarRevision(uid: string, args: Record<string, unknown>) {
+  const summary = String(args.resumen ?? '').trim().slice(0, 400)
+  if (!summary) fail('resumen es requerido')
+  const points = (Array.isArray(args.puntos) ? args.puntos : []).map((x) => String(x).trim().slice(0, 300)).filter(Boolean).slice(0, 6)
+  const { plan } = await loadPlan(uid)
+  plan.review = { date: today(), summary, points }
+  await savePlanDb(uid, plan)
+  return { ok: true, guardada: plan.review, nota: 'Aparece en Inicio de la app como "Última revisión".' }
+}
+
 // ---------- definicion MCP ----------
 
 type Tool = {
@@ -451,6 +634,83 @@ export const TOOLS: Tool[] = [
     inputSchema: { type: 'object', properties: { quincenas: { type: 'number', description: 'Cuántas quincenas mostrar desde la actual (1 a 6, por defecto 3)' } } },
     annotations: { readOnlyHint: true },
     run: estrategia,
+  },
+  {
+    name: 'auditar_estrategia',
+    title: 'Auditar la estrategia',
+    description: 'Úsalo cuando el usuario pida auditar, revisar, analizar o actualizar la estrategia. Devuelve en una sola llamada la estrategia calculada, el plan, las metas con la fecha de su último saldo, los pagos programados, el historial real de las últimas 6 quincenas y una guía de auditoría. Analiza con criterio propio siguiendo la guía; mide alternativas con simular_estrategia antes de recomendarlas.',
+    inputSchema: { type: 'object', properties: {} },
+    annotations: { readOnlyHint: true },
+    run: (uid) => auditarEstrategia(uid),
+  },
+  {
+    name: 'historial_quincenas',
+    title: 'Historial por quincena',
+    description: 'Gasto real por sobre contra su límite, ingresos y gasto por método de pago en las últimas N quincenas. Sirve para ver patrones.',
+    inputSchema: { type: 'object', properties: { quincenas: { type: 'number', description: '1 a 12, por defecto 6' } } },
+    annotations: { readOnlyHint: true },
+    run: historialQuincenas,
+  },
+  {
+    name: 'simular_estrategia',
+    title: 'Simular cambios a la estrategia',
+    description: 'Compara las fechas proyectadas actuales contra un escenario: cambios al plan y/o ingresos extra futuros (ej. décimo, pago atrasado de la empresa). No guarda nada.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        cambios: {
+          type: 'object',
+          description: 'Cambios hipotéticos al plan',
+          properties: {
+            ingreso_quincena: { type: 'number' },
+            meta_abono_quincena: { type: 'number' },
+            sobres: { type: 'object', description: 'id del sobre -> nuevo límite por quincena, ej. {"salidas": 30}', additionalProperties: { type: 'number' } },
+            metas: {
+              type: 'object',
+              description: 'id de la meta -> cambios, ej. {"colchon": {"meta": 300}, "tarjeta": {"cuota": 95, "dia_pago": 28}}',
+              additionalProperties: {
+                type: 'object',
+                properties: { meta: { type: 'number' }, tasa: { type: 'number' }, cuota: { type: 'number' }, dia_pago: { type: 'number' }, antes_de_deudas: { type: 'boolean' } },
+              },
+            },
+          },
+        },
+        ingresos_extra: {
+          type: 'array',
+          description: 'Ingresos futuros supuestos',
+          items: { type: 'object', required: ['fecha', 'monto'], properties: { fecha: { type: 'string', description: 'YYYY-MM-DD' }, monto: { type: 'number' } } },
+        },
+      },
+    },
+    annotations: { readOnlyHint: true },
+    run: simularEstrategia,
+  },
+  {
+    name: 'ajustar_plan',
+    title: 'Ajustar el plan',
+    description: 'Aplica cambios al plan (mismo formato que "cambios" de simular_estrategia) y devuelve las fechas antes y después. SOLO después de que el usuario apruebe explícitamente esos cambios.',
+    inputSchema: {
+      type: 'object',
+      required: ['cambios'],
+      properties: { cambios: { type: 'object', description: 'Igual que en simular_estrategia' } },
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false },
+    run: ajustarPlan,
+  },
+  {
+    name: 'guardar_revision',
+    title: 'Guardar revisión de la estrategia',
+    description: 'Guarda la conclusión de una auditoría para que el usuario la vea en Inicio de la app. Reemplaza la anterior.',
+    inputSchema: {
+      type: 'object',
+      required: ['resumen'],
+      properties: {
+        resumen: { type: 'string', description: 'Veredicto en 1-2 oraciones (máx. 400 caracteres)' },
+        puntos: { type: 'array', items: { type: 'string' }, description: 'Hasta 6 hallazgos o acciones concretas' },
+      },
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false },
+    run: guardarRevision,
   },
   {
     name: 'resumen_quincena',

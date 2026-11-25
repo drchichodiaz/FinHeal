@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import type { Review } from '../lib/config'
 import type { QuincenaPlan, Step, Strategy } from '../lib/strategy'
 import { fromISO, prettyDate } from '../lib/dates'
 import { money } from '../lib/format'
@@ -134,5 +135,28 @@ function Milestones({ strategy }: { strategy: Strategy }) {
       </ul>
       <p className="mt-2 text-xs text-slate-400">Se recalcula con cada gasto, abono o saldo que anotas. Sin contar décimos: si llegan, adelantan las fechas.</p>
     </div>
+  )
+}
+
+export function Revision({ review }: { review?: Review }) {
+  if (!review)
+    return <p className="px-1 text-xs text-slate-500">🧠 Para un análisis con criterio (no solo cálculos), dile a Claude: <span className="font-medium text-slate-700">"audita la estrategia"</span>.</p>
+  const age = Math.round((Date.now() - fromISO(review.date).getTime()) / 86400000)
+  return (
+    <Card>
+      <div className="flex items-baseline justify-between gap-2">
+        <h2 className="font-semibold text-slate-900">🧠 Última revisión de Claude</h2>
+        <span className="shrink-0 text-xs text-slate-500">{prettyDate(review.date)}</span>
+      </div>
+      <p className="mt-1 text-sm text-slate-800">{review.summary}</p>
+      {review.points.length > 0 && (
+        <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-slate-700">
+          {review.points.map((p) => (
+            <li key={p}>{p}</li>
+          ))}
+        </ul>
+      )}
+      {age > 15 && <p className="mt-2 text-xs text-slate-500">Tiene {age} días. Pídele a Claude: "audita la estrategia".</p>}
+    </Card>
   )
 }
