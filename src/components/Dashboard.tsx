@@ -5,6 +5,8 @@ import { money } from '../lib/format'
 import { latestBalance, type Data } from '../lib/useData'
 import { Card } from './ui'
 import { PagosResumen } from './Pagos'
+import { Estrategia } from './Estrategia'
+import { buildStrategy } from '../lib/strategy'
 
 // Tokens de grafica (paleta de referencia dataviz, superficie clara)
 const C = {
@@ -44,11 +46,14 @@ function niceScale(max: number, ticks = 4) {
 
 const compact = (n: number) => (n >= 10000 ? `$${Math.round(n / 1000)}K` : `$${n.toLocaleString('es-PA')}`)
 
-export function Dashboard({ data, goTo }: { data: Data; goTo: (tab: 'metas' | 'quincena') => void }) {
+export function Dashboard({ data, goTo }: { data: Data; goTo: (tab: 'metas' | 'quincena' | 'plan') => void }) {
   const series = useMemo(() => debtSeries(data), [data])
   const plan = useMemo(() => planLine(data, series), [data, series])
   const q = useMemo(() => quincenaStat(data, periodFor(todayISO())), [data])
   const history = useMemo(() => recentQuincenas(data), [data])
+  const strategy = useMemo(() => buildStrategy(data, todayISO()), [data])
+  const now0 = strategy.quincenas[0]
+  const debtThisQ = now0 ? now0.steps.filter((s) => s.kind === 'cuota' || s.kind === 'extra').reduce((t, s) => t + s.amount, 0) : data.plan.debtTargetPerQuincena
   const debts = debtGoals(data)
   const others = data.plan.goals.filter((g) => g.type !== 'deuda')
 
@@ -70,9 +75,15 @@ export function Dashboard({ data, goTo }: { data: Data; goTo: (tab: 'metas' | 'q
           ) : (
             <span className="text-slate-500">Sin cambios desde {start ? dayMonth(fromISO(start.date).getTime()) : 'el inicio'}</span>
           )}
-          {plan?.payoff && <span className="text-slate-500"> · al ritmo del plan, libre en {monthYear(plan.payoff)}</span>}
+          {strategy.debtFree ? (
+            <span className="text-slate-500"> · con tu estrategia, libre de deudas en {monthYear(fromISO(strategy.debtFree).getTime())}</span>
+          ) : (
+            plan?.payoff && <span className="text-slate-500"> · al ritmo del plan, libre en {monthYear(plan.payoff)}</span>
+          )}
         </div>
       </Card>
+
+      <Estrategia strategy={strategy} onSetup={() => goTo('plan')} />
 
       {/* KPI de la quincena */}
       <div>
@@ -86,7 +97,7 @@ export function Dashboard({ data, goTo }: { data: Data; goTo: (tab: 'metas' | 'q
           <Tile label="Queda en cuenta" value={money(q.left)} tone={q.left < 0 ? 'critical' : undefined} sub={`${daysLeft} días restantes`} />
           <Tile label="Ingresos" value={money(q.income)} sub="esta quincena" />
           <MeterTile label="Gastado en sobres" value={q.spent} max={q.budget} kind="spend" />
-          <MeterTile label="Abono a deudas" value={q.debt} max={data.plan.debtTargetPerQuincena} kind="goal" />
+          <MeterTile label="Abono a deudas" value={q.debt} max={Math.round(debtThisQ * 100) / 100} kind="goal" />
         </div>
       </div>
 
@@ -98,7 +109,7 @@ export function Dashboard({ data, goTo }: { data: Data; goTo: (tab: 'metas' | 'q
           <h2 className="font-semibold text-slate-900">¿Va bajando la deuda?</h2>
           <span className="text-xs text-slate-500">Abonado: {money(paid)}</span>
         </div>
-        <Legend items={[{ color: C.accent, label: 'Deuda real' }, ...(plan ? [{ color: C.plan, label: 'Ritmo del plan' }] : [])]} />
+        <Legend items={[{ color: C.accent, label: 'Deuda real' }, ...(plan ? [{ color: C.plan, label: 'Meta original' }] : [])]} />
         <DebtChart series={series} plan={plan} />
         {series.length < 2 && (
           <p className="mt-2 text-xs text-slate-500">
@@ -187,7 +198,7 @@ function MeterTile({ label, value, max, kind }: { label: string; value: number; 
         <div className="h-full rounded-full" style={{ width: `${Math.min(100, pct * 100)}%`, background: fill }} />
       </div>
       <div className="mt-1 text-xs text-slate-500">
-        {status ? <span className="font-medium text-slate-700">{status} · </span> : null}de {money(max)}
+        {max <= 0 && kind === 'goal' ? 'esta quincena no toca abono' : <>{status ? <span className="font-medium text-slate-700">{status} · </span> : null}de {money(max)}</>}
       </div>
     </Card>
   )

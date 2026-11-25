@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { BILL_CATEGORY, newId, type Bill, type BillRepeat } from '../lib/config'
 import { REPEAT_LABEL, nextDue, planBills, type BillPlan } from '../lib/bills'
-import { fromISO, prettyDate, todayISO } from '../lib/dates'
+import { fromISO, inPeriod, periodFor, prettyDate, todayISO } from '../lib/dates'
 import { money, round2 } from '../lib/format'
 import { supabase } from '../lib/supabase'
 import { savePlan, type Data } from '../lib/useData'
@@ -163,7 +163,9 @@ function BillCard({ p, data, saveBills, onSaved }: { p: BillPlan; data: Data; sa
     if (!valid) return
     setBusy(true)
     const saved = round2(Math.max(0, b.saved + sign * n))
-    if (await saveBills(replace({ ...b, saved, savedOn: todayISO() }), sign > 0 ? `Apartado ${money(n)} para ${b.label}` : `Devuelto ${money(n)}`)) setMode(null)
+    const prev = b.savedOn && inPeriod(b.savedOn, periodFor(todayISO())) ? (b.lastSaved ?? 0) : 0
+    const lastSaved = round2(Math.max(0, prev + sign * n))
+    if (await saveBills(replace({ ...b, saved, savedOn: todayISO(), lastSaved }), sign > 0 ? `Apartado ${money(n)} para ${b.label}` : `Devuelto ${money(n)}`)) setMode(null)
     setBusy(false)
   }
 
@@ -178,7 +180,7 @@ function BillCard({ p, data, saveBills, onSaved }: { p: BillPlan; data: Data; sa
       return
     }
     const next = nextDue(b.due, b.repeat)
-    const bills = next ? replace({ ...b, due: next, saved: 0, savedOn: undefined }) : others
+    const bills = next ? replace({ ...b, due: next, saved: 0, savedOn: undefined, lastSaved: undefined }) : others
     await saveBills(bills, next ? `Pagado ${money(amt)}. Próximo: ${prettyDate(next)}` : `Pagado ${money(amt)}: ${b.label}`)
     setMode(null)
     setBusy(false)

@@ -20,6 +20,10 @@ export type Goal = {
   target: number
   hint: string
   reducedBySource?: string // si llega un ingreso con esta fuente, el saldo baja solo
+  rate?: number // deudas: tasa anual en % (ordena el metodo avalancha y suma intereses en la proyeccion)
+  payment?: number // deudas: cuota fija (o pago minimo) que hay que pagar si o si
+  payDay?: number // deudas: dia del mes en que se cobra esa cuota
+  beforeDebt?: boolean // ahorro: se llena antes de abonar extra a deudas (fondo de emergencia)
 }
 
 export type BillRepeat = 'none' | 'monthly' | 'yearly'
@@ -34,6 +38,7 @@ export type Bill = {
   repeat: BillRepeat
   saved: number // lo apartado hasta ahora (sigue en la cuenta, pero ya no es dinero libre)
   savedOn?: string // ultima fecha en que se aparto algo
+  lastSaved?: number // cuanto se aparto en la quincena de savedOn
   note?: string
 }
 
@@ -45,6 +50,8 @@ export type Plan = {
   goals: Goal[]
   rules: string[]
   bills: Bill[]
+  incomePerQuincena: number // lo que deberia entrar cada quincena (salario neto); 0 = sin estrategia
+  startedOn?: string // YYYY-MM-DD: la quincena en que empezo el plan se presupuesta en proporcion
 }
 
 // Categoria fija para abonos a deudas: no cuenta contra los sobres
@@ -75,6 +82,7 @@ export const DEFAULT_PLAN: Plan = {
   ],
   rules: [],
   bills: [],
+  incomePerQuincena: 0,
 }
 
 export function allCategories(plan: Plan): Category[] {
@@ -94,6 +102,8 @@ export function normalizePlan(raw: Partial<Plan> | null | undefined): Plan {
     incomeSources: raw?.incomeSources?.length ? raw.incomeSources : DEFAULT_PLAN.incomeSources,
     goals: raw?.goals ?? DEFAULT_PLAN.goals,
     rules: raw?.rules ?? [],
+    incomePerQuincena: Number(raw?.incomePerQuincena ?? 0) || 0,
+    startedOn: raw?.startedOn || undefined,
     bills: (raw?.bills ?? []).map((b) => ({ ...b, amount: Number(b.amount) || 0, saved: Number(b.saved) || 0, repeat: b.repeat ?? 'none' })),
   }
 }

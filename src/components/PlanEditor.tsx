@@ -38,6 +38,8 @@ export function PlanEditor({ data, onSaved }: { data: Data; onSaved: (msg: strin
   async function save() {
     const clean: Plan = {
       bills: data.plan.bills, // se editan en Metas; usar siempre lo ultimo guardado
+      incomePerQuincena: round2(Number(plan.incomePerQuincena) || 0),
+      startedOn: plan.startedOn || undefined,
       categories: plan.categories
         .filter((c) => c.label.trim())
         .map((c) => ({ ...c, label: c.label.trim(), budget: round2(Number(c.budget) || 0) })),
@@ -52,6 +54,10 @@ export function PlanEditor({ data, onSaved }: { data: Data; onSaved: (msg: strin
           initial: round2(Number(g.initial) || 0),
           target: round2(Number(g.target) || 0),
           reducedBySource: g.reducedBySource || undefined,
+          rate: g.type === 'deuda' && Number(g.rate) > 0 ? round2(Number(g.rate)) : undefined,
+          payment: g.type === 'deuda' && Number(g.payment) > 0 ? round2(Number(g.payment)) : undefined,
+          payDay: g.type === 'deuda' && Number(g.payDay) >= 1 && Number(g.payDay) <= 31 ? Math.round(Number(g.payDay)) : undefined,
+          beforeDebt: g.type === 'ahorro' && g.beforeDebt ? true : undefined,
         })),
       rules: rules
         .split('\n')
@@ -106,7 +112,19 @@ export function PlanEditor({ data, onSaved }: { data: Data; onSaved: (msg: strin
         </button>
       </Card>
 
-      <Card>
+      <Card className="space-y-3">
+        <label className="flex items-center justify-between gap-3 text-sm">
+          <span>
+            <span className="block font-semibold text-slate-900">💵 Te entra por quincena</span>
+            <span className="text-xs text-slate-500">Salario neto. Con esto se calcula la estrategia.</span>
+          </span>
+          <input
+            className={`${input} w-24 text-right`}
+            inputMode="decimal"
+            value={String(plan.incomePerQuincena)}
+            onChange={(e) => setPlan((p) => ({ ...p, incomePerQuincena: e.target.value as unknown as number }))}
+          />
+        </label>
         <label className="flex items-center justify-between gap-3 text-sm">
           <span className="font-semibold text-slate-900">💳 Meta de abono a deudas por quincena</span>
           <input
@@ -165,6 +183,28 @@ export function PlanEditor({ data, onSaved }: { data: Data; onSaved: (msg: strin
                 </label>
               </div>
               <input className={`${input} w-full`} placeholder="Nota (ej. fecha meta)" value={g.hint} onChange={(e) => setGoal(i, { hint: e.target.value })} />
+              {g.type === 'deuda' && (
+                <div className="grid grid-cols-3 gap-2 text-xs text-slate-500">
+                  <label className="space-y-1">
+                    <span>Tasa anual %</span>
+                    <input className={`${input} w-full text-right`} inputMode="decimal" value={g.rate === undefined ? '' : String(g.rate)} onChange={(e) => setGoal(i, { rate: e.target.value as unknown as number })} />
+                  </label>
+                  <label className="space-y-1">
+                    <span>Cuota / mínimo</span>
+                    <input className={`${input} w-full text-right`} inputMode="decimal" value={g.payment === undefined ? '' : String(g.payment)} onChange={(e) => setGoal(i, { payment: e.target.value as unknown as number })} />
+                  </label>
+                  <label className="space-y-1">
+                    <span>Día de pago</span>
+                    <input className={`${input} w-full text-right`} inputMode="numeric" value={g.payDay === undefined ? '' : String(g.payDay)} onChange={(e) => setGoal(i, { payDay: e.target.value as unknown as number })} />
+                  </label>
+                </div>
+              )}
+              {g.type === 'ahorro' && (
+                <label className="flex items-center gap-2 text-xs text-slate-600">
+                  <input type="checkbox" checked={!!g.beforeDebt} onChange={(e) => setGoal(i, { beforeDebt: e.target.checked })} />
+                  Llenar antes de abonar extra a deudas (fondo de emergencia)
+                </label>
+              )}
               {g.type === 'cobrar' && (
                 <label className="flex items-center gap-2 text-xs text-slate-500">
                   <span className="shrink-0">Baja sola con ingresos de:</span>

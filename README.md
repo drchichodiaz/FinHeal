@@ -61,7 +61,7 @@ FinHeal incluye un servidor MCP en `/api/mcp` para usar la app desde Claude (web
 2. URL: `https://TU-DOMINIO/api/mcp`.
 3. Claude abre la pantalla de autorización de FinHeal: entra con tu correo y contraseña.
 
-Herramientas: `resumen_quincena`, `listar_movimientos`, `anotar_gasto`, `anotar_ingreso`, `ver_metas`, `actualizar_meta`, `borrar_movimiento`, `ver_plan`, y para pagos programados `ver_pagos`, `agendar_pago`, `apartar_pago`, `pagar_programado`, `borrar_pago`.
+Herramientas: `estrategia`, `resumen_quincena`, `listar_movimientos`, `anotar_gasto`, `anotar_ingreso`, `ver_metas`, `actualizar_meta`, `borrar_movimiento`, `ver_plan`, y para pagos programados `ver_pagos`, `agendar_pago`, `apartar_pago`, `pagar_programado`, `borrar_pago`.
 
 Seguridad: OAuth 2.1 con PKCE S256 y registro dinámico de clientes (solo se aceptan callbacks de claude.ai, claude.com y localhost). Los tokens son JWT firmados con `MCP_JWT_SECRET` (access 1 h, refresh 90 días). **Rotar `MCP_JWT_SECRET` revoca todas las conexiones.** Cada consulta filtra por el usuario del token.
 

@@ -2,6 +2,7 @@
 // y TODAS las consultas filtran por ese user_id (la service role key salta RLS).
 import { BILL_CATEGORY, DEBT_CATEGORY, allCategories, isSobreExpense, newId, normalizePlan, type Bill, type BillRepeat, type Plan } from '../../src/lib/config.js'
 import { REPEAT_LABEL, nextDue, planBills, type BillPlan } from '../../src/lib/bills.js'
+import { buildStrategy } from '../../src/lib/strategy.js'
 import { fromISO, inPeriod, periodFor } from '../../src/lib/dates.js'
 import { adminDb } from './db.js'
 
@@ -342,8 +343,11 @@ async function apartarPago(uid: string, args: Record<string, unknown>) {
   const bill = findBill(plan, args.pago)
   const n = Number(args.monto)
   if (!Number.isFinite(n) || n === 0 || Math.abs(n) > 100000) fail('monto debe ser un número distinto de 0 (negativo para devolver lo apartado)')
+  const fechaAp = dateArg(args.fecha)
+  const prev = bill.savedOn && inPeriod(bill.savedOn, periodFor(fechaAp)) ? (bill.lastSaved ?? 0) : 0
   bill.saved = r2(Math.max(0, bill.saved + n))
-  bill.savedOn = dateArg(args.fecha)
+  bill.savedOn = fechaAp
+  bill.lastSaved = r2(Math.max(0, prev + n))
   await savePlanDb(uid, plan)
   return { ok: true, ...billView(planBills([bill], today())[0]) }
 }
@@ -360,7 +364,7 @@ async function pagarProgramado(uid: string, args: Record<string, unknown>) {
   ) as { id: string }
   const next = nextDue(bill.due, bill.repeat)
   plan.bills = next
-    ? plan.bills.map((b) => (b.id === bill.id ? { ...b, due: next, saved: 0, savedOn: undefined } : b))
+    ? plan.bills.map((b) => (b.id === bill.id ? { ...b, due: next, saved: 0, savedOn: undefined, lastSaved: undefined } : b))
     : plan.bills.filter((b) => b.id !== bill.id)
   await savePlanDb(uid, plan)
   return {
@@ -381,6 +385,51 @@ async function borrarPago(uid: string, args: Record<string, unknown>) {
   return { ok: true, borrado: bill.label, tenia_apartado: bill.saved }
 }
 
+// ---------- estrategia ----------
+
+async function estrategia(uid: string, args: Record<string, unknown>) {
+  const hoy = today()
+  const p = periodFor(hoy)
+  const n = Math.min(6, Math.max(1, Number(args.quincenas ?? 3) || 3))
+  const { plan } = await loadPlan(uid)
+  const db = adminDb()
+  const exp = check(await db.from('expenses').select('spent_on, amount, category').eq('user_id', uid).gte('spent_on', p.start).lte('spent_on', p.end), 'gastos') as { spent_on: string; amount: number; category: string }[]
+  const inc = check(await db.from('incomes').select('received_on, amount, source').eq('user_id', uid).gte('received_on', p.start).lte('received_on', p.end), 'ingresos') as { received_on: string; amount: number; source: string }[]
+  const s = buildStrategy(
+    {
+      plan,
+      expenses: exp.map((e) => ({ ...e, amount: Number(e.amount) })),
+      incomes: inc.map((i) => ({ ...i, amount: Number(i.amount) })),
+      balances: await latestBalances(uid),
+    },
+    hoy,
+  )
+  if (!s.ready) return { lista: false, aviso: 'Falta el ingreso por quincena en el plan (pantalla Plan de la app).' }
+  return {
+    hoy,
+    como_funciona:
+      'Cascada por quincena: sobres -> cuotas fijas -> apartados de pagos programados -> colchón hasta su meta -> extra a la deuda de mayor tasa -> ahorro. Si no alcanza, sale del colchón. En la quincena actual "hecho" es lo ya registrado (null = no medible).',
+    quincenas: s.quincenas.slice(0, n).map((q) => ({
+      quincena: q.period.label,
+      desde: q.period.start,
+      hasta: q.period.end,
+      actual: q.current,
+      ingreso_que_se_reparte: q.income,
+      ingreso_ya_anotado: q.current ? q.received : undefined,
+      pasos: q.steps.map((st) => ({ paso: st.label, monto: st.amount, hecho: q.current ? st.done : undefined, fecha: st.date, nota: st.note })),
+      faltante: q.deficit,
+      deuda_total_al_cierre: q.debtAfter,
+      avisos: q.warnings,
+    })),
+    fechas_proyectadas: {
+      deudas: s.debts.map((d) => ({ deuda: d.label, pagada: d.date })),
+      ahorros: s.savings.map((d) => ({ meta: d.label, alcanzada: d.date })),
+      libre_de_deudas: s.debtFree,
+    },
+    supuestos: 'Ingreso fijo por quincena, sin décimos ni pagos atrasados de la empresa; intereses de la tarjeta y préstamo incluidos.',
+  }
+}
+
 // ---------- definicion MCP ----------
 
 type Tool = {
@@ -395,6 +444,14 @@ type Tool = {
 const fecha = { type: 'string', description: 'Fecha YYYY-MM-DD. Si se omite, hoy.' }
 
 export const TOOLS: Tool[] = [
+  {
+    name: 'estrategia',
+    title: 'Estrategia: qué hacer ahora',
+    description: 'Cómo repartir la quincena actual paso a paso (con lo ya hecho y lo pendiente), las próximas quincenas y las fechas proyectadas para pagar cada deuda y llenar cada ahorro. Úsalo cuando el usuario pregunte qué hacer, cuánto abonar, cuánto le queda o cuándo sale de deudas.',
+    inputSchema: { type: 'object', properties: { quincenas: { type: 'number', description: 'Cuántas quincenas mostrar desde la actual (1 a 6, por defecto 3)' } } },
+    annotations: { readOnlyHint: true },
+    run: estrategia,
+  },
   {
     name: 'resumen_quincena',
     title: 'Resumen de la quincena',
