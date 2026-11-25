@@ -61,3 +61,15 @@ export function allCategories(plan: Plan): Category[] {
 export function newId(prefix: string): string {
   return `${prefix}-${Math.random().toString(36).slice(2, 8)}`
 }
+
+// Completa campos faltantes por si el JSON guardado es de una version anterior
+export function normalizePlan(raw: Partial<Plan> | null | undefined): Plan {
+  return {
+    categories: raw?.categories ?? DEFAULT_PLAN.categories,
+    debtTargetPerQuincena: Number(raw?.debtTargetPerQuincena ?? 0),
+    methods: raw?.methods?.length ? raw.methods : DEFAULT_PLAN.methods,
+    incomeSources: raw?.incomeSources?.length ? raw.incomeSources : DEFAULT_PLAN.incomeSources,
+    goals: raw?.goals ?? DEFAULT_PLAN.goals,
+    rules: raw?.rules ?? [],
+  }
+}

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { DEFAULT_PLAN, type Plan } from './config'
+import { DEFAULT_PLAN, normalizePlan, type Plan } from './config'
 import { supabase, num, type Balance, type Expense, type Income } from './supabase'
 
 export type Data = {
@@ -11,18 +11,6 @@ export type Data = {
 }
 
 const EMPTY: Data = { expenses: [], incomes: [], balances: [], plan: DEFAULT_PLAN, hasPlan: false }
-
-// Completa campos faltantes por si el JSON guardado es de una version anterior
-function normalizePlan(raw: Partial<Plan> | null | undefined): Plan {
-  return {
-    categories: raw?.categories ?? DEFAULT_PLAN.categories,
-    debtTargetPerQuincena: Number(raw?.debtTargetPerQuincena ?? 0),
-    methods: raw?.methods?.length ? raw.methods : DEFAULT_PLAN.methods,
-    incomeSources: raw?.incomeSources?.length ? raw.incomeSources : DEFAULT_PLAN.incomeSources,
-    goals: raw?.goals ?? DEFAULT_PLAN.goals,
-    rules: raw?.rules ?? [],
-  }
-}
 
 export function useData(enabled: boolean) {
   const [data, setData] = useState<Data>(EMPTY)

@@ -35,18 +35,35 @@ npm run seed-plan -- ../plan.json
 
 ## 4. Vercel
 
-**Add New → Project → Import** el repo. En **Environment Variables** agrega solo:
+**Add New → Project → Import** el repo. En **Environment Variables** agrega:
 
-- `VITE_SUPABASE_URL`
-- `VITE_SUPABASE_ANON_KEY`
+| Variable | Para qué | ¿Llega al navegador? |
+|---|---|---|
+| `VITE_SUPABASE_URL` | App y servidor | Sí (es pública) |
+| `VITE_SUPABASE_ANON_KEY` | App y servidor | Sí (es pública, la protege RLS) |
+| `SUPABASE_SERVICE_ROLE_KEY` | Solo el conector MCP (`/api`) | **No.** Vite solo expone variables `VITE_*` |
+| `MCP_JWT_SECRET` | Firma los tokens OAuth del conector (≥ 32 caracteres aleatorios) | No |
+| `APP_TZ` | Zona horaria para "hoy" (ej. `America/New_York`) | No |
 
-La service role key **nunca** va en Vercel ni en el repo.
+Nunca pongas la service role key en una variable `VITE_*` ni en el repo.
 
 ## 5. En el celular
 
 Abre la URL, inicia sesión y:
 - **Android (Chrome):** menú ⋮ → *Agregar a pantalla principal*.
 - **iPhone (Safari):** Compartir → *Agregar a inicio*.
+
+## Conector para Claude (MCP + OAuth)
+
+FinHeal incluye un servidor MCP en `/api/mcp` para usar la app desde Claude (web, escritorio y móvil).
+
+1. En claude.ai: **Settings → Connectors → Add custom connector**.
+2. URL: `https://TU-DOMINIO/api/mcp`.
+3. Claude abre la pantalla de autorización de FinHeal: entra con tu correo y contraseña.
+
+Herramientas: `resumen_quincena`, `listar_movimientos`, `anotar_gasto`, `anotar_ingreso`, `ver_metas`, `actualizar_meta`, `borrar_movimiento`, `ver_plan`.
+
+Seguridad: OAuth 2.1 con PKCE S256 y registro dinámico de clientes (solo se aceptan callbacks de claude.ai, claude.com y localhost). Los tokens son JWT firmados con `MCP_JWT_SECRET` (access 1 h, refresh 90 días). **Rotar `MCP_JWT_SECRET` revoca todas las conexiones.** Cada consulta filtra por el usuario del token.
 
 ## Exportar datos
 
