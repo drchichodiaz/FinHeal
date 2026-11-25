@@ -66,3 +66,8 @@ alter table public.plans enable row level security;
 drop policy if exists "own plan" on public.plans;
 create policy "own plan" on public.plans for all to authenticated
   using (user_id = (select auth.uid())) with check (user_id = (select auth.uid()));
+
+-- Permisos para la Data API (los proyectos nuevos de Supabase no los dan por defecto).
+-- anon NO recibe nada: sin login no se puede leer ni escribir. RLS sigue filtrando por usuario.
+grant usage on schema public to authenticated, service_role;
+grant select, insert, update, delete on public.expenses, public.incomes, public.balances, public.plans to authenticated, service_role;
