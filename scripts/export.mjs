@@ -31,6 +31,13 @@ for (const [table, order] of [['expenses', 'spent_on'], ['incomes', 'received_on
   console.log(`${table}: ${data.length} filas`)
 }
 
+const { data: plans, error: pErr } = await db.from('plans').select('data, updated_at')
+if (pErr) {
+  console.error(`plans: ${pErr.message}`)
+  process.exit(1)
+}
+result.plan = plans[0]?.data ?? null
+
 const file = join(out, 'finanzas-latest.json')
 writeFileSync(file, JSON.stringify({ exported_at: new Date().toISOString(), ...result }, null, 2))
 console.log(`Guardado en ${file}`)
