@@ -7,6 +7,14 @@ import { adminDb } from './db.js'
 const r2 = (n: number) => Math.round(n * 100) / 100
 const ISO = /^\d{4}-\d{2}-\d{2}$/
 
+// Comparacion sin mayusculas ni tildes ("debito" == "Débito")
+const norm = (v: unknown) =>
+  String(v ?? '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toLowerCase()
+
 export function today(): string {
   const tz = process.env.APP_TZ || 'UTC'
   return new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())
@@ -49,17 +57,17 @@ async function latestBalances(uid: string) {
 }
 
 function resolveCategory(plan: Plan, input: unknown) {
-  const q = String(input ?? '').trim().toLowerCase()
+  const q = norm(input)
   const cats = allCategories(plan)
-  const found = cats.find((c) => c.id.toLowerCase() === q) ?? cats.find((c) => c.label.toLowerCase() === q) ?? cats.find((c) => c.label.toLowerCase().includes(q))
+  const found = cats.find((c) => norm(c.id) === q) ?? cats.find((c) => norm(c.label) === q) ?? cats.find((c) => norm(c.label).includes(q))
   if (!found) fail(`Categoría "${input}" no existe. Opciones: ${cats.map((c) => `${c.id} (${c.label})`).join(', ')}`)
   return found!
 }
 
 function resolveOption(options: string[], input: unknown, what: string): string {
   if (input === undefined || input === null || input === '') return options[0]
-  const q = String(input).trim().toLowerCase()
-  const found = options.find((o) => o.toLowerCase() === q) ?? options.find((o) => o.toLowerCase().includes(q))
+  const q = norm(input)
+  const found = options.find((o) => norm(o) === q) ?? options.find((o) => norm(o).includes(q))
   if (!found) fail(`${what} "${input}" no existe. Opciones: ${options.join(', ')}`)
   return found!
 }
@@ -146,6 +154,23 @@ async function anotarGasto(uid: string, args: Record<string, unknown>) {
     'guardar gasto',
   ) as { id: string }
 
+  // Pago a deudas: baja el saldo de la deuda indicada (el corte corrige intereses despues)
+  let deuda: Record<string, unknown> | null = null
+  if (cat.id === DEBT_CATEGORY.id) {
+    const debts = plan.goals.filter((g) => g.type === 'deuda')
+    const q = norm(args.meta)
+    const goal = q ? debts.find((g) => norm(g.kind) === q) ?? debts.find((g) => norm(g.label).includes(q)) : debts.length === 1 ? debts[0] : undefined
+    if (goal) {
+      const balances = await latestBalances(uid)
+      const current = balances.find((b) => b.kind === goal.kind)?.amount ?? goal.initial
+      const next = Math.max(0, r2(current - amount))
+      check(await adminDb().from('balances').insert({ user_id: uid, kind: goal.kind, amount: next, recorded_on: fecha, note: 'Automático: abono de $' + amount }), 'ajustar deuda')
+      deuda = { meta: goal.label, antes: current, ahora: next }
+    } else {
+      deuda = { aviso: 'No se ajustó ningún saldo. Indica "meta": ' + debts.map((g) => g.kind).join(' o ') }
+    }
+  }
+
   let sobre: Record<string, unknown> | null = null
   if (cat.budget > 0) {
     const p = periodFor(fecha)
@@ -156,7 +181,7 @@ async function anotarGasto(uid: string, args: Record<string, unknown>) {
     const used = r2(rows.reduce((t, x) => t + Number(x.amount), 0))
     sobre = { sobre: cat.label, gastado: used, limite: cat.budget, disponible: r2(cat.budget - used), pasado: used > cat.budget }
   }
-  return { ok: true, id: row.id, guardado: { fecha, monto: amount, categoria: cat.label, metodo: method, nota: note }, sobre }
+  return { ok: true, id: row.id, guardado: { fecha, monto: amount, categoria: cat.label, metodo: method, nota: note }, sobre, deuda }
 }
 
 async function anotarIngreso(uid: string, args: Record<string, unknown>) {
@@ -211,8 +236,8 @@ async function verMetas(uid: string) {
 
 async function actualizarMeta(uid: string, args: Record<string, unknown>) {
   const { plan } = await loadPlan(uid)
-  const q = String(args.meta ?? '').trim().toLowerCase()
-  const goal = plan.goals.find((g) => g.kind.toLowerCase() === q) ?? plan.goals.find((g) => g.label.toLowerCase().includes(q))
+  const q = norm(args.meta)
+  const goal = plan.goals.find((g) => norm(g.kind) === q) ?? plan.goals.find((g) => norm(g.label).includes(q))
   if (!goal) fail(`Meta "${args.meta}" no existe. Opciones: ${plan.goals.map((g) => `${g.kind} (${g.label})`).join(', ')}`)
   const saldo = Number(args.saldo)
   if (!Number.isFinite(saldo) || saldo < 0) fail('saldo debe ser un número mayor o igual a 0')
@@ -282,6 +307,7 @@ export const TOOLS: Tool[] = [
         monto: { type: 'number', description: 'Monto en dólares' },
         categoria: { type: 'string', description: 'id o nombre del sobre (ej. "super", "salidas"). "deuda" = pago a deudas.' },
         metodo: { type: 'string', description: 'Método de pago (ej. Efectivo, Yappy, Débito). Si se omite, el primero del plan.' },
+        meta: { type: 'string', description: 'Solo si categoria = "deuda": id o nombre de la deuda que se abona (ej. "tarjeta", "prestamo"). Su saldo baja automáticamente.' },
         fecha,
         nota: { type: 'string' },
       },

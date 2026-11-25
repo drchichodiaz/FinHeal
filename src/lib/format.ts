@@ -1,4 +1,4 @@
-const fmt = new Intl.NumberFormat('es-PA', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 })
+const fmt = new Intl.NumberFormat('es-PA', { style: 'currency', currency: 'USD', currencyDisplay: 'narrowSymbol', minimumFractionDigits: 2 })
 
 export const money = (n: number) => fmt.format(n)
 

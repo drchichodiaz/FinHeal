@@ -8,16 +8,17 @@ import { Quincena } from './components/Quincena'
 import { Metas } from './components/Metas'
 import { Historial } from './components/Historial'
 import { PlanEditor } from './components/PlanEditor'
+import { Dashboard } from './components/Dashboard'
 import { Toast } from './components/ui'
 
-type Tab = 'anotar' | 'quincena' | 'metas' | 'historial' | 'plan'
+type Tab = 'inicio' | 'anotar' | 'quincena' | 'metas' | 'historial' | 'plan'
 
 const TABS: { id: Tab; label: string; icon: string }[] = [
+  { id: 'inicio', label: 'Inicio', icon: '🏠' },
   { id: 'anotar', label: 'Anotar', icon: '➕' },
   { id: 'quincena', label: 'Quincena', icon: '📊' },
   { id: 'metas', label: 'Metas', icon: '🎯' },
   { id: 'historial', label: 'Historial', icon: '🧾' },
-  { id: 'plan', label: 'Plan', icon: '⚙️' },
 ]
 
 export default function App() {
@@ -61,6 +62,9 @@ export default function App() {
         <h1 className="text-lg font-bold text-slate-900">FinHeal</h1>
         <div className="flex items-center gap-3 text-xs text-slate-500">
           {loading && <span>Sincronizando…</span>}
+          <button onClick={() => setTab('plan')} aria-label="Plan" className={`text-base ${tab === 'plan' ? 'opacity-100' : 'opacity-60'}`}>
+            ⚙️
+          </button>
           <button onClick={() => supabase.auth.signOut()} className="underline">
             Salir
           </button>
@@ -76,6 +80,7 @@ export default function App() {
       {error && <div className="mx-4 mb-2 rounded-lg bg-rose-50 p-2 text-sm text-rose-700">Error cargando datos: {error}</div>}
 
       <main className="px-4">
+        {tab === 'inicio' && <Dashboard data={data} goTo={setTab} />}
         {tab === 'anotar' && <AddEntry data={data} onSaved={notify} />}
         {tab === 'quincena' && <Quincena data={data} />}
         {tab === 'metas' && <Metas data={data} onSaved={notify} />}

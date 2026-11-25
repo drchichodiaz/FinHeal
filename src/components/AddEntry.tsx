@@ -1,5 +1,5 @@
 import { useMemo, useState, type FormEvent } from 'react'
-import { allCategories } from '../lib/config'
+import { DEBT_CATEGORY, allCategories } from '../lib/config'
 import { inPeriod, periodFor, todayISO } from '../lib/dates'
 import { money, round2 } from '../lib/format'
 import { supabase } from '../lib/supabase'
@@ -15,6 +15,9 @@ export function AddEntry({ data, onSaved }: { data: Data; onSaved: (msg: string)
   const [categoryRaw, setCategory] = useState(categories[0].id)
   const [methodRaw, setMethod] = useState<string>(plan.methods[0])
   const [sourceRaw, setSource] = useState<string>(plan.incomeSources[0])
+  const debts = plan.goals.filter((g) => g.type === 'deuda')
+  const [goalRaw, setGoal] = useState<string>('')
+  const goal = debts.find((g) => g.kind === goalRaw) ?? debts[0]
   const [date, setDate] = useState(todayISO())
   const [note, setNote] = useState('')
   const [busy, setBusy] = useState(false)
@@ -47,13 +50,22 @@ export function AddEntry({ data, onSaved }: { data: Data; onSaved: (msg: string)
     const noteVal = note.trim() || null
 
     if (mode === 'gasto') {
-      const { error } = await supabase.from('expenses').insert({ amount: amt, category, method, spent_on: date, note: noteVal })
+      const isDebt = category === DEBT_CATEGORY.id && !!goal
+      const finalNote = isDebt && !noteVal ? `Abono a ${goal.label}` : noteVal
+      const { error } = await supabase.from('expenses').insert({ amount: amt, category, method, spent_on: date, note: finalNote })
+      if (!error && isDebt) {
+        // Baja el saldo de esa deuda al instante; el saldo real (con intereses) se corrige despues del corte
+        const current = latestBalance(data.balances, goal.kind, goal.initial)
+        await supabase.from('balances').insert({ kind: goal.kind, amount: Math.max(0, round2(current - amt)), recorded_on: date, note: `Automático: abono de ${money(amt)}` })
+      }
       if (error) {
         setError(error.message)
       } else {
         const left = remaining === null ? null : round2(remaining - amt)
         onSaved(
-          left === null
+          isDebt
+            ? `Abono guardado. ${goal.label}: ${money(Math.max(0, round2(latestBalance(data.balances, goal.kind, goal.initial) - amt)))} 💪`
+            : left === null
             ? `Guardado: ${money(amt)} en ${cat.label}`
             : left >= 0
               ? `Guardado. Te quedan ${money(left)} en ${cat.label}`
@@ -137,6 +149,12 @@ export function AddEntry({ data, onSaved }: { data: Data; onSaved: (msg: string)
               </button>
             ))}
           </div>
+          {category === DEBT_CATEGORY.id && debts.length > 0 && (
+            <div>
+              <div className="mb-1 text-xs font-medium text-slate-500">¿A qué deuda?</div>
+              <Chips options={debts.map((g) => g.label)} value={goal.label} onChange={(l) => setGoal(debts.find((g) => g.label === l)?.kind ?? '')} />
+            </div>
+          )}
           <Chips options={plan.methods} value={method} onChange={setMethod} />
         </>
       ) : (
